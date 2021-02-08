@@ -1,4 +1,4 @@
-package apm
+package otredis
 
 import (
 	"context"

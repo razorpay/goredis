@@ -4,12 +4,13 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/go-redis/redis"
+	"github.com/go-redis/redis/v8"
 	"github.com/labstack/echo/v4"
 	apmecho "github.com/opentracing-contrib/echo"
-	apmgoredis "github.com/opentracing-contrib/goredis"
-	"github.com/opentracing-contrib/goredis/examples/tracer"
+	otredis "github.com/opentracing-contrib/goredis"
 	"github.com/opentracing/opentracing-go"
+
+	"github.com/opentracing-contrib/goredis/examples/tracer"
 )
 
 const (
@@ -44,13 +45,13 @@ func main() {
 	defer rdb.Close()
 
 	e.GET("/", func(c echo.Context) error {
-		rdb = apmgoredis.Wrap(rdb).WithContext(c.Request().Context())
+		rdb = otredis.Wrap(rdb, nil).WithContext(c.Request().Context())
 		rdb.Ping()
 		return c.String(http.StatusOK, "Hello, World!")
 	})
 
 	e.GET("/hello", func(c echo.Context) error {
-		rdb = apmgoredis.Wrap(rdb).WithContext(c.Request().Context())
+		rdb = otredis.Wrap(rdb, nil).WithContext(c.Request().Context())
 		rdb.Set("data", "world", 1000000) // 1ms
 		data := rdb.Get("data").String()
 
