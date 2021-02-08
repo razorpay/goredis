@@ -1,14 +1,15 @@
 package main
 
 import (
+	"net/http"
+	"os"
+
 	"github.com/go-redis/redis"
 	"github.com/labstack/echo/v4"
 	apmecho "github.com/opentracing-contrib/echo"
-	"github.com/opentracing-contrib/goredis/examples/tracer"
 	apmgoredis "github.com/opentracing-contrib/goredis"
+	"github.com/opentracing-contrib/goredis/examples/tracer"
 	"github.com/opentracing/opentracing-go"
-	"net/http"
-	"os"
 )
 
 const (
@@ -16,7 +17,6 @@ const (
 )
 
 func main() {
-
 	flag := os.Getenv("JAEGER_ENABLED")
 	if flag == "true" {
 		// 1. init tracer
@@ -51,7 +51,7 @@ func main() {
 
 	e.GET("/hello", func(c echo.Context) error {
 		rdb = apmgoredis.Wrap(rdb).WithContext(c.Request().Context())
-		rdb.Set("data", "world", 1000000) //1ms
+		rdb.Set("data", "world", 1000000) // 1ms
 		data := rdb.Get("data").String()
 
 		return c.String(http.StatusOK, data)
