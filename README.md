@@ -5,9 +5,9 @@ a middleware for goredis to use opentracing
 import (
 	"net/http"
 
-	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis/v8"
 
-	apmgoredis "github.com/severgroup-tt/goredis"
+	otredis "github.com/krantideep95/goredis"
 )
 
 var redisClient *redis.Client // initialized at program startup
@@ -17,7 +17,7 @@ func handleRequest(w http.ResponseWriter, req *http.Request) {
 	// server is instrumented with Elastic APM (e.g. with apmhttp),
 	// Redis commands will be reported as spans within the request's
 	// transaction.
-	client := apmgoredis.Wrap(redisClient).WithContext(req.Context())
+	client := otredis.Wrap(redisClient, nil).WithContext(req.Context())
 	...
 }
 ```
