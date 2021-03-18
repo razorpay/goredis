@@ -2,25 +2,37 @@ package otredis
 
 import (
 	"context"
-	"fmt"
-	"strings"
+	"strconv"
 
+	"github.com/go-redis/redis/extra/rediscmd"
 	"github.com/go-redis/redis/v8"
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
 )
 
-type opentracingHook struct{ tracer opentracing.Tracer }
+type Config struct {
+	Host     string
+	Port     uint16
+	Database int
+}
+
+type opentracingHook struct {
+	tracer opentracing.Tracer
+	config Config
+}
 
 var _ redis.Hook = opentracingHook{}
 
 func (h opentracingHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	spanName := strings.ToUpper(cmd.Name())
-	span, _ := opentracing.StartSpanFromContextWithTracer(ctx, h.tracer, spanName)
+	span, _ := opentracing.StartSpanFromContextWithTracer(ctx, h.tracer, cmd.FullName())
 
 	ext.DBType.Set(span, "redis")
 	ext.SpanKindRPCClient.Set(span)
-	ext.DBStatement.Set(span, fmt.Sprintf("%v", cmd.Args()))
+	ext.DBStatement.Set(span, rediscmd.CmdString(cmd))
+	ext.PeerService.Set(span, h.config.Host)
+	ext.PeerAddress.Set(span, h.config.Host+":"+strconv.Itoa(int(h.config.Port)))
+	ext.PeerPort.Set(span, h.config.Port)
+
 	// to maintain compatibility with opentelemetry convention
 	span.SetTag("db.system", "redis")
 
@@ -31,19 +43,32 @@ func (h opentracingHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (co
 
 func (h opentracingHook) AfterProcess(ctx context.Context, cmd redis.Cmder) error {
 	span := opentracing.SpanFromContext(ctx)
+
+	if err := cmd.Err(); err != nil {
+		if err != redis.Nil {
+			ext.LogError(span, err)
+		}
+	}
+
 	span.Finish()
 	return nil
 }
 
 func (h opentracingHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
-	span, ctx := opentracing.StartSpanFromContextWithTracer(ctx, h.tracer, "(pipeline)")
-	dbMethod := formatCommandsAsDbMethods(cmds)
+	summary, cmdsString := rediscmd.CmdsString(cmds)
+	span, ctx := opentracing.StartSpanFromContextWithTracer(ctx, h.tracer, "pipeline "+summary)
 
 	ext.DBType.Set(span, "redis")
 	ext.SpanKindRPCClient.Set(span)
-	ext.DBStatement.Set(span, fmt.Sprintf("%v", dbMethod))
+	ext.DBStatement.Set(span, cmdsString)
+	ext.PeerService.Set(span, h.config.Host)
+	ext.PeerAddress.Set(span, h.config.Host+":"+strconv.Itoa(int(h.config.Port)))
+	ext.PeerPort.Set(span, h.config.Port)
+
+
 	// to maintain compatibility with opentelemetry convention
 	span.SetTag("db.system", "redis")
+	span.SetTag("db.redis.num_cmd", len(cmds))
 
 	ctx = opentracing.ContextWithSpan(ctx, span)
 	return ctx, nil
@@ -51,6 +76,12 @@ func (h opentracingHook) BeforeProcessPipeline(ctx context.Context, cmds []redis
 
 func (h opentracingHook) AfterProcessPipeline(ctx context.Context, cmds []redis.Cmder) error {
 	span := opentracing.SpanFromContext(ctx)
+	if err := cmds[0].Err(); err != nil {
+		if err != redis.Nil {
+			ext.LogError(span, err)
+		}
+	}
+
 	span.Finish()
 	return nil
 }
@@ -80,7 +111,7 @@ type Client interface {
 // Wrap wraps client such that executed commands are reported as spans to Elastic APM,
 // using the client's associated context.
 // A context-specific client may be obtained by using Client.WithContext.
-func Wrap(client redis.UniversalClient, tracer opentracing.Tracer) Client {
+func Wrap(client redis.UniversalClient, tracer opentracing.Tracer, config Config) Client {
 	if tracer == nil {
 		tracer = opentracing.GlobalTracer()
 	}
@@ -100,12 +131,13 @@ func Wrap(client redis.UniversalClient, tracer opentracing.Tracer) Client {
 type contextClient struct {
 	*redis.Client
 	tracer opentracing.Tracer
+	config Config
 }
 
 func (c contextClient) WithContext(ctx context.Context) Client {
 	c.Client = c.Client.WithContext(ctx)
 
-	c.AddHook(opentracingHook{c.tracer})
+	c.AddHook(opentracingHook{tracer: c.tracer, config: c.config})
 
 	return c
 }
@@ -121,6 +153,7 @@ func (c contextClient) RingClient() *redis.Ring {
 type contextClusterClient struct {
 	*redis.ClusterClient
 	tracer opentracing.Tracer
+	config Config
 }
 
 func (c contextClusterClient) Cluster() *redis.ClusterClient {
@@ -134,7 +167,7 @@ func (c contextClusterClient) RingClient() *redis.Ring {
 func (c contextClusterClient) WithContext(ctx context.Context) Client {
 	c.ClusterClient = c.ClusterClient.WithContext(ctx)
 
-	c.AddHook(opentracingHook{c.tracer})
+	c.AddHook(opentracingHook{tracer: c.tracer, config: c.config})
 
 	return c
 }
@@ -142,10 +175,10 @@ func (c contextClusterClient) WithContext(ctx context.Context) Client {
 type contextRingClient struct {
 	*redis.Ring
 	tracer opentracing.Tracer
+	config Config
 }
 
 func (c contextRingClient) Cluster() *redis.ClusterClient {
-
 	return nil
 }
 
@@ -156,16 +189,7 @@ func (c contextRingClient) RingClient() *redis.Ring {
 func (c contextRingClient) WithContext(ctx context.Context) Client {
 	c.Ring = c.Ring.WithContext(ctx)
 
-	c.AddHook(opentracingHook{c.tracer})
+	c.AddHook(opentracingHook{tracer: c.tracer, config: c.config})
 
 	return c
-}
-
-func formatCommandsAsDbMethods(cmds []redis.Cmder) string {
-	cmdsAsDbMethods := make([]string, len(cmds))
-	for i, cmd := range cmds {
-		dbMethod := cmd.Name()
-		cmdsAsDbMethods[i] = dbMethod
-	}
-	return strings.Join(cmdsAsDbMethods, " -> ")
 }
