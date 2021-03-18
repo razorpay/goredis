@@ -8,6 +8,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
+	"go.opentelemetry.io/otel/semconv"
 )
 
 type Config struct {
@@ -29,12 +30,14 @@ func (h *opentracingHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (c
 	ext.DBType.Set(span, "redis")
 	ext.SpanKindRPCClient.Set(span)
 	ext.DBStatement.Set(span, rediscmd.CmdString(cmd))
-	ext.PeerService.Set(span, h.config.Host)
 	ext.PeerAddress.Set(span, h.config.Host+":"+strconv.Itoa(int(h.config.Port)))
 	ext.PeerPort.Set(span, h.config.Port)
 
 	// to maintain compatibility with opentelemetry convention
-	span.SetTag("db.system", "redis")
+	span.SetTag(string(semconv.DBSystemRedis.Key), semconv.DBSystemRedis.Value.AsString())
+	span.SetTag(string(semconv.DBRedisDBIndexKey), h.config.Database)
+	span.SetTag(string(semconv.NetTransportTCP.Key), semconv.NetTransportTCP.Value.AsString())
+	span.SetTag(string(semconv.DBOperationKey), cmd.FullName())
 
 	ctx = opentracing.ContextWithSpan(ctx, span)
 
@@ -67,7 +70,10 @@ func (h *opentracingHook) BeforeProcessPipeline(ctx context.Context, cmds []redi
 
 
 	// to maintain compatibility with opentelemetry convention
-	span.SetTag("db.system", "redis")
+	span.SetTag(string(semconv.DBSystemRedis.Key), semconv.DBSystemRedis.Value.AsString())
+	span.SetTag(string(semconv.DBRedisDBIndexKey), h.config.Database)
+	span.SetTag(string(semconv.NetTransportTCP.Key), semconv.NetTransportTCP.Value.AsString())
+	span.SetTag(string(semconv.DBOperationKey), summary)
 	span.SetTag("db.redis.num_cmd", len(cmds))
 
 	ctx = opentracing.ContextWithSpan(ctx, span)
