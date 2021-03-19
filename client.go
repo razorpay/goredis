@@ -2,7 +2,6 @@ package otredis
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/go-redis/redis/extra/rediscmd"
 	"github.com/go-redis/redis/v8"
@@ -27,17 +26,16 @@ var _ redis.Hook = &opentracingHook{}
 func (h *opentracingHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
 	span, _ := opentracing.StartSpanFromContextWithTracer(ctx, h.tracer, cmd.FullName())
 
-	ext.DBType.Set(span, "redis")
 	ext.SpanKindRPCClient.Set(span)
-	ext.DBStatement.Set(span, rediscmd.CmdString(cmd))
-	ext.PeerAddress.Set(span, h.config.Host+":"+strconv.Itoa(int(h.config.Port)))
-	ext.PeerPort.Set(span, h.config.Port)
 
 	// to maintain compatibility with opentelemetry convention
 	span.SetTag(string(semconv.DBSystemRedis.Key), semconv.DBSystemRedis.Value.AsString())
 	span.SetTag(string(semconv.DBRedisDBIndexKey), h.config.Database)
 	span.SetTag(string(semconv.NetTransportTCP.Key), semconv.NetTransportTCP.Value.AsString())
 	span.SetTag(string(semconv.DBOperationKey), cmd.FullName())
+	span.SetTag(string(semconv.NetPeerNameKey), h.config.Host)
+	span.SetTag(string(semconv.NetPeerPortKey), h.config.Port)
+	span.SetTag(string(semconv.DBStatementKey), rediscmd.CmdString(cmd))
 
 	ctx = opentracing.ContextWithSpan(ctx, span)
 
@@ -61,19 +59,16 @@ func (h *opentracingHook) BeforeProcessPipeline(ctx context.Context, cmds []redi
 	summary, cmdsString := rediscmd.CmdsString(cmds)
 	span, ctx := opentracing.StartSpanFromContextWithTracer(ctx, h.tracer, "pipeline "+summary)
 
-	ext.DBType.Set(span, "redis")
 	ext.SpanKindRPCClient.Set(span)
-	ext.DBStatement.Set(span, cmdsString)
-	ext.PeerService.Set(span, h.config.Host)
-	ext.PeerAddress.Set(span, h.config.Host+":"+strconv.Itoa(int(h.config.Port)))
-	ext.PeerPort.Set(span, h.config.Port)
-
 
 	// to maintain compatibility with opentelemetry convention
 	span.SetTag(string(semconv.DBSystemRedis.Key), semconv.DBSystemRedis.Value.AsString())
 	span.SetTag(string(semconv.DBRedisDBIndexKey), h.config.Database)
 	span.SetTag(string(semconv.NetTransportTCP.Key), semconv.NetTransportTCP.Value.AsString())
+	span.SetTag(string(semconv.NetPeerNameKey), h.config.Host)
+	span.SetTag(string(semconv.NetPeerPortKey), h.config.Port)
 	span.SetTag(string(semconv.DBOperationKey), summary)
+	span.SetTag(string(semconv.DBStatementKey), cmdsString)
 	span.SetTag("db.redis.num_cmd", len(cmds))
 
 	ctx = opentracing.ContextWithSpan(ctx, span)
@@ -107,9 +102,8 @@ type Client interface {
 	RingClient() *redis.Ring
 }
 
-// Wrap wraps client such that executed commands are reported as spans to Elastic APM,
-// using the client's associated context.
-// A context-specific client may be obtained by using Client.WithContext.
+// Wrap wraps client such that executed commands are reported as spans to tracer,
+// using the command's associated context.
 func Wrap(client redis.UniversalClient, tracer opentracing.Tracer, config Config) Client {
 	if tracer == nil {
 		tracer = opentracing.GlobalTracer()
@@ -134,7 +128,6 @@ type contextClient struct {
 	tracer opentracing.Tracer
 	config Config
 }
-
 
 func (c contextClient) Cluster() *redis.ClusterClient {
 	return nil
